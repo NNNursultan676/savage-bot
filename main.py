@@ -1,79 +1,91 @@
 import logging
 import os
 from aiogram import Bot, Dispatcher, executor, types
-from aiogram.types import ChatJoinRequest, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.dispatcher.middlewares import BaseMiddleware
+from aiogram.dispatcher.handler import CancelHandler
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 
 load_dotenv()
-API_TOKEN = os.getenv("BOT_TOKEN")
 
-ADMIN_ID = 8090093417
+API_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = -1002007015749
+LEADER_ID = 8090093417  # твой Telegram ID
 
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
+# Middleware: пропускаем только нужную группу
+class GroupOnlyMiddleware(BaseMiddleware):
+    async def on_pre_process_message(self, message: types.Message, data: dict):
+        if message.chat.id != GROUP_ID:
+            raise CancelHandler()
+
+dp.middleware.setup(GroupOnlyMiddleware())
+
+# Заявки
 join_requests = []
-approved_users = []
-action_log = []
+accepted_users = []
+log = []
 
-def user_in_group_only(message: types.Message):
-    return message.chat.id == GROUP_ID
-
-@dp.message_handler(commands=['start'])
-async def start(message: types.Message):
-    await message.reply("Я работаю. Используй /joinlist или /info4leader")
-
-@dp.chat_join_request_handler()
-async def handle_join_request(join_request: ChatJoinRequest):
-    join_requests.append(join_request)
-    await bot.send_message(
-        GROUP_ID,
-        f"👤 Заявка от: {join_request.from_user.full_name} (@{join_request.from_user.username or 'нет username'})\n"
-        f"Чтобы принять, используй /joinlist",
-    )
-
+# Команда для всех — список заявок
 @dp.message_handler(commands=['joinlist'])
-async def show_join_list(message: types.Message):
-    if not user_in_group_only(message):
-        return
-
+async def join_list_handler(message: types.Message):
     if not join_requests:
-        await message.reply("Нет ожидающих заявок.")
+        await message.reply("Нет входящих заявок.")
         return
 
-    for req in join_requests:
-        btn = InlineKeyboardMarkup().add(
-            InlineKeyboardButton("✅ Принять", callback_data=f"approve:{req.from_user.id}")
+    for user in join_requests:
+        markup = InlineKeyboardMarkup().add(
+            InlineKeyboardButton("✅ Принять", callback_data=f"accept_{user['id']}")
         )
-        await message.reply(f"Заявка от: {req.from_user.full_name} (@{req.from_user.username or 'нет username'})", reply_markup=btn)
+        await message.reply(f"Заявка от @{user['username']} (ID: {user['id']})", reply_markup=markup)
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith("approve:"))
-async def approve_user(callback_query: types.CallbackQuery):
-    user_id = int(callback_query.data.split(":")[1])
-    join_req = next((r for r in join_requests if r.from_user.id == user_id), None)
+# Кнопка "Принять"
+@dp.callback_query_handler(lambda c: c.data.startswith('accept_'))
+async def accept_callback(callback_query: types.CallbackQuery):
+    user_id = int(callback_query.data.split('_')[1])
+    user = next((u for u in join_requests if u['id'] == user_id), None)
 
-    if join_req:
-        await bot.approve_chat_join_request(GROUP_ID, user_id)
-        join_requests.remove(join_req)
-        approved_users.append(user_id)
-        action_log.append(f"✅ {callback_query.from_user.full_name} одобрил {join_req.from_user.full_name}")
-        await callback_query.answer("Пользователь одобрен")
-        await bot.send_message(GROUP_ID, f"✅ {join_req.from_user.full_name} принят в группу.")
-    else:
-        await callback_query.answer("Заявка не найдена", show_alert=True)
+    if not user:
+        await callback_query.answer("Заявка не найдена.")
+        return
 
+    try:
+        await bot.approve_chat_join_request(chat_id=GROUP_ID, user_id=user_id)
+        join_requests.remove(user)
+        accepted_users.append(user)
+        log.append(f"✅ Принят: @{user['username']} (ID: {user['id']})")
+        await callback_query.answer("Пользователь принят.")
+    except Exception as e:
+        await callback_query.answer("Ошибка при принятии.")
+        logging.error(e)
+
+# Команда для лидера — журнал
 @dp.message_handler(commands=['info4leader'])
 async def info_for_leader(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.reply("⛔ Только для админа.")
+    if message.from_user.id != LEADER_ID:
         return
+    if not log:
+        await message.reply("Журнал пуст.")
+    else:
+        await message.reply("\n".join(log[-10:]))
 
-    approved = len(approved_users)
-    log_text = "\n".join(action_log[-10:]) or "Нет действий."
-    await message.reply(f"📊 Принятых заявок: {approved}\n\n🕓 Последние действия:\n{log_text}")
+# Приём заявок
+@dp.chat_join_request_handler()
+async def handle_join_request(request: types.ChatJoinRequest):
+    join_requests.append({
+        "id": request.from_user.id,
+        "username": request.from_user.username or "без ника"
+    })
+    await bot.send_message(GROUP_ID, f"🆕 Новая заявка от @{request.from_user.username or 'без ника'}")
+
+# Обработка /start в личке
+@dp.message_handler(commands=['start'], chat_type=types.ChatType.PRIVATE)
+async def private_start(message: types.Message):
+    await message.reply("❗ Этот бот работает только внутри группы.")
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
