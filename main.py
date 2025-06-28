@@ -1,115 +1,79 @@
-import json
 import logging
-from datetime import datetime
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils import executor
-from aiogram.dispatcher.filters import Command
+import os
+from aiogram import Bot, Dispatcher, executor, types
+from aiogram.types import ChatJoinRequest, InlineKeyboardMarkup, InlineKeyboardButton
+from dotenv import load_dotenv
 
-import asyncio
-from aiohttp import web
+load_dotenv()
+API_TOKEN = os.getenv("API_TOKEN")
 
-API_TOKEN = '8141002619:AAHsrBI9Hy73mB7EbZmVvz9vyu924J6OzPI'  
 ADMIN_ID = 8090093417
+GROUP_ID = -1002007015749
 
 logging.basicConfig(level=logging.INFO)
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-DATA_FILE = 'data.json'
+join_requests = []
+approved_users = []
+action_log = []
 
-def load_data():
-    try:
-        with open(DATA_FILE, 'r') as f:
-            return json.load(f)
-    except:
-        return {'requests': [], 'log': []}
+def user_in_group_only(message: types.Message):
+    return message.chat.id == GROUP_ID
 
-def save_data(data):
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
+@dp.message_handler(commands=['start'])
+async def start(message: types.Message):
+    await message.reply("Я работаю. Используй /joinlist или /info4leader")
 
-# При поступлении заявки в группу
 @dp.chat_join_request_handler()
-async def handle_join_request(join_request: types.ChatJoinRequest):
-    data = load_data()
-    user = join_request.from_user
-    data['requests'].append({
-        'user_id': user.id,
-        'username': f"@{user.username}" if user.username else f"id:{user.id}",
-        'chat_id': join_request.chat.id,
-    })
-    save_data(data)
+async def handle_join_request(join_request: ChatJoinRequest):
+    join_requests.append(join_request)
+    await bot.send_message(
+        GROUP_ID,
+        f"👤 Заявка от: {join_request.from_user.full_name} (@{join_request.from_user.username or 'нет username'})\n"
+        f"Чтобы принять, используй /joinlist",
+    )
 
-# /joinlist (доступна всем)
-@dp.message_handler(Command('joinlist'))
-async def join_list(message: types.Message):
-    data = load_data()
-    if not data['requests']:
-        await message.reply("📭 Нет входящих заявок.")
+@dp.message_handler(commands=['joinlist'])
+async def show_join_list(message: types.Message):
+    if not user_in_group_only(message):
         return
 
-    for req in data['requests']:
-        keyboard = InlineKeyboardMarkup().add(
-            InlineKeyboardButton(
-                text=f"✅ Принять {req['username']}",
-                callback_data=f"approve:{req['user_id']}:{req['chat_id']}"
-            )
+    if not join_requests:
+        await message.reply("Нет ожидающих заявок.")
+        return
+
+    for req in join_requests:
+        btn = InlineKeyboardMarkup().add(
+            InlineKeyboardButton("✅ Принять", callback_data=f"approve:{req.from_user.id}")
         )
-        await message.reply(f"📩 Заявка от {req['username']}", reply_markup=keyboard)
+        await message.reply(f"Заявка от: {req.from_user.full_name} (@{req.from_user.username or 'нет username'})", reply_markup=btn)
 
-# Обработка кнопки "Принять"
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("approve:"))
-async def process_approve(callback_query: types.CallbackQuery):
-    _, user_id, chat_id = callback_query.data.split(':')
-    user_id = int(user_id)
-    chat_id = int(chat_id)
-    admin_username = f"@{callback_query.from_user.username}" if callback_query.from_user.username else f"id:{callback_query.from_user.id}"
+async def approve_user(callback_query: types.CallbackQuery):
+    user_id = int(callback_query.data.split(":")[1])
+    join_req = next((r for r in join_requests if r.from_user.id == user_id), None)
 
-    data = load_data()
-    data['requests'] = [r for r in data['requests'] if r['user_id'] != user_id]
-    data['log'].append({
-        'admin': admin_username,
-        'user': f"id:{user_id}",
-        'time': datetime.now().strftime("%d.%m.%Y %H:%M")
-    })
-    save_data(data)
+    if join_req:
+        await bot.approve_chat_join_request(GROUP_ID, user_id)
+        join_requests.remove(join_req)
+        approved_users.append(user_id)
+        action_log.append(f"✅ {callback_query.from_user.full_name} одобрил {join_req.from_user.full_name}")
+        await callback_query.answer("Пользователь одобрен")
+        await bot.send_message(GROUP_ID, f"✅ {join_req.from_user.full_name} принят в группу.")
+    else:
+        await callback_query.answer("Заявка не найдена", show_alert=True)
 
-    await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
-    await callback_query.message.edit_text(f"{admin_username} принял id:{user_id} ✅")
-
-# /info4leader (только тебе)
-@dp.message_handler(Command('info4leader'))
-async def info_leader(message: types.Message):
+@dp.message_handler(commands=['info4leader'])
+async def info_for_leader(message: types.Message):
     if message.from_user.id != ADMIN_ID:
-        return
-    data = load_data()
-    if not data['log']:
-        await message.reply("Журнал пуст.")
+        await message.reply("⛔ Только для админа.")
         return
 
-    lines = [f"{entry['admin']} принял {entry['user']} — {entry['time']}" for entry in data['log']]
-    await message.reply("\n".join(lines))
-
-# /ping для UptimeRobot
-@dp.message_handler(Command("ping"))
-async def ping(message: types.Message):
-    await message.answer("✅ Бот работает.")
-
-# Web-сервер для Render (например, для /ping)
-async def handle_web_ping(request):
-    return web.Response(text="✅ Bot is alive!")
-
-async def start_webserver():
-    app = web.Application()
-    app.add_routes([web.get('/ping', handle_web_ping)])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', 10000)
-    await site.start()
-
-async def on_startup(_):
-    asyncio.create_task(start_webserver())
+    approved = len(approved_users)
+    log_text = "\n".join(action_log[-10:]) or "Нет действий."
+    await message.reply(f"📊 Принятых заявок: {approved}\n\n🕓 Последние действия:\n{log_text}")
 
 if __name__ == '__main__':
-    executor.start_polling(dp, on_startup=on_startup)
+    executor.start_polling(dp, skip_updates=True)
