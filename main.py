@@ -9,7 +9,7 @@ from aiogram.dispatcher.filters import Command
 import asyncio
 from aiohttp import web
 
-API_TOKEN = 'YOUR_BOT_TOKEN'  
+API_TOKEN = 'BOT_TOKEN'  
 ADMIN_ID = 8090093417
 
 logging.basicConfig(level=logging.INFO)
