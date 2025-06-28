@@ -1,7 +1,7 @@
 import logging
 import os
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher.middlewares import BaseMiddleware
 from aiogram.dispatcher.handler import CancelHandler
@@ -63,7 +63,8 @@ async def accept_callback(callback_query: types.CallbackQuery):
         await bot.approve_chat_join_request(chat_id=GROUP_ID, user_id=user_id)
         join_requests.remove(user)
         accepted_users.append(user)
-        now = datetime.now().strftime("%d.%m.%Y %H:%M")
+        now = (datetime.now() + timedelta(hours=5)).strftime("%d.%m.%Y %H:%M")
+
         log.append(f"✅ @{callback_query.from_user.username or 'без ника'} принял @{user['username']} (ID: {user['id']}) в {now}")
         await callback_query.answer("Пользователь принят.")
         await bot.delete_message(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id)
