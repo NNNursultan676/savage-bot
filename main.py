@@ -89,3 +89,9 @@ async def private_start(message: types.Message):
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
+import asyncio
+import socket
+
+async def hold_port():
+    server = await asyncio.start_server(lambda r, w: None, port := int(os.environ.get("PORT", 10000)))
+    await server.serve_forever()
