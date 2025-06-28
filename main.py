@@ -5,7 +5,7 @@ from aiogram.types import ChatJoinRequest, InlineKeyboardMarkup, InlineKeyboardB
 from dotenv import load_dotenv
 
 load_dotenv()
-API_TOKEN = os.getenv("API_TOKEN")
+API_TOKEN = os.getenv("BOT_TOKEN")
 
 ADMIN_ID = 8090093417
 GROUP_ID = -1002007015749
