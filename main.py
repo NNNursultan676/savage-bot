@@ -86,12 +86,17 @@ async def handle_join_request(request: types.ChatJoinRequest):
 @dp.message_handler(commands=['start'], chat_type=types.ChatType.PRIVATE)
 async def private_start(message: types.Message):
     await message.reply("❗ Этот бот работает только внутри группы.")
-
-if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+# Вставить в конец main.py (опционально, для Render)
 import asyncio
 import socket
 
 async def hold_port():
     server = await asyncio.start_server(lambda r, w: None, port := int(os.environ.get("PORT", 10000)))
     await server.serve_forever()
+
+# и в __main__ запусти это:
+if __name__ == '__main__':
+    loop = asyncio.get_event_loop()
+    loop.create_task(hold_port())  # это заставит Render "поверить", что открыт порт
+    executor.start_polling(dp, skip_updates=True)
+
